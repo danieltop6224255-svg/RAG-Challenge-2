@@ -111,8 +111,7 @@ class Pipeline:
         logging.basicConfig(level=logging.DEBUG)
         
         pdf_parser = PDFParser(
-            output_dir=self.paths.parsed_reports_path,
-            csv_metadata_path=self.paths.subset_path
+            output_dir=self.paths.parsed_reports_path
         )
         pdf_parser.debug_data_path = self.paths.parsed_reports_debug_path
             
@@ -129,8 +128,7 @@ class Pipeline:
         logging.basicConfig(level=logging.DEBUG)
         
         pdf_parser = PDFParser(
-            output_dir=self.paths.parsed_reports_path,
-            csv_metadata_path=self.paths.subset_path
+            output_dir=self.paths.parsed_reports_path
         )
         pdf_parser.debug_data_path = self.paths.parsed_reports_debug_path
 
