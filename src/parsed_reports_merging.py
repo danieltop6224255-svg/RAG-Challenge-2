@@ -48,14 +48,14 @@ class PageTextPreparation:
         
     def process_document(self, document_data):
         """
-        Process a single report, returning a list of processed pages and printing a message if corrections were made.
+        Process a single document, returning a list of processed pages and printing a message if corrections were made.
         """
-        self.report_data = document_data
+        self.document_data = document_data
         processed_pages = []
         total_corrections = 0
         corrections_list = []
 
-        raw_content = self.report_data.get("content", [])
+        raw_content = self.document_data.get("content", [])
 
         if isinstance(raw_content, dict) and "pages" in raw_content:
             processed_pages = []
@@ -82,16 +82,16 @@ class PageTextPreparation:
         if total_corrections > 0:
             print(
                 f"Fixed {total_corrections} occurrences in the file "
-                f"{self.report_data['metainfo']['sha1_name']}"
+                f"{self.document_data['metainfo']['sha1_name']}"
             )
             print(corrections_list[:30])
         
-        processed_report = {
+        processed_document = {
             "chunks": None,
             "pages": processed_pages
         }
         
-        return processed_report
+        return processed_document
 
     def prepare_page_text(self, page_number):
         """Main method to process page blocks and return assembled string."""
@@ -112,7 +112,7 @@ class PageTextPreparation:
 
     def _get_page_data(self, page_number):
         """Returns page dict for given page number, or None if not found."""
-        all_pages = self.report_data.get("content", [])
+        all_pages = self.document_data.get("content", [])
         for page in all_pages:
             if page.get("page") == page_number:
                 return page
@@ -394,14 +394,14 @@ class PageTextPreparation:
         return "\n" + "".join(chunk) + "\n"
 
     def _get_table_by_id(self, table_id):
-        """Get table representation by ID from report data.
+        """Get table representation by ID from document data.
         Returns markdown or serialized text based on configuration."""
-        for t in self.report_data.get("tables", []):
+        for t in self.document_data.get("tables", []):
             if t.get("table_id") == table_id:
                 if self.use_serialized_tables:
                     return self._get_serialized_table_text(t, self.serialized_tables_instead_of_markdown)
                 return t.get("markdown", "")
-        raise ValueError(f"Table with ID={table_id} not found in report_data!")
+        raise ValueError(f"Table with ID={table_id} not found in document_data!")
     
     def _get_serialized_table_text(self, table, serialized_tables_instead_of_markdown):
         """Convert serialized table format to text string.
@@ -426,33 +426,26 @@ class PageTextPreparation:
             return combined_text
 
 
-    # Backward compatibility wrappers
-    def process_reports(self, reports_dir: Path = None, reports_paths: List[Path] = None, output_dir: Path = None):
-        return self.process_documents(input_dir=reports_dir, input_paths=reports_paths, output_dir=output_dir)
-
-    def process_report(self, report_data):
-        return self.process_document(report_data)
-
-    def export_to_markdown(self, reports_dir: Path, output_dir: Path):
-        """Export processed reports to markdown files.
+    def export_to_markdown(self, documents_dir: Path, output_dir: Path):
+        """Export processed documents to markdown files.
         
         Args:
-            reports_dir: Directory containing JSON report files
+            documents_dir: Directory containing JSON document files
             output_dir: Directory where markdown files will be saved
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        for report_path in reports_dir.glob("*.json"):
-            with open(report_path, 'r', encoding='utf-8') as f:
-                report_data = json.load(f)
+        for document_path in documents_dir.glob("*.json"):
+            with open(document_path, 'r', encoding='utf-8') as f:
+                document_data = json.load(f)
             
-            processed_report = self.process_document(report_data)
+            processed_document = self.process_document(document_data)
             
             document_text = ""
-            for page in processed_report['pages']:
+            for page in processed_document['pages']:
                 document_text += f"\n\n---\n\n# Page {page['page']}\n\n"
                 document_text += page['text']
             
-            report_name = report_data['metainfo']['sha1_name']
-            with open(output_dir / f"{report_name}.md", "w", encoding="utf-8") as f:
+            document_name = document_data.get('metainfo', {}).get('sha1_name', document_path.stem)
+            with open(output_dir / f"{document_name}.md", "w", encoding="utf-8") as f:
                 f.write(document_text)

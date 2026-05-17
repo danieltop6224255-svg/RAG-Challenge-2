@@ -30,16 +30,16 @@ class TextSplitter():
             
         return tables_by_page
 
-    def _split_report(self, file_content: Dict[str, any], serialized_tables_report_path: Optional[Path] = None) -> Dict[str, any]:
-        """Split report into chunks, preserving markdown tables in content and optionally including serialized tables."""
+    def _split_document(self, file_content: Dict[str, any], serialized_tables_document_path: Optional[Path] = None) -> Dict[str, any]:
+        """Split document into chunks, preserving markdown tables in content and optionally including serialized tables."""
         chunks = []
         chunk_id = 0
         
         tables_by_page = {}
-        if serialized_tables_report_path is not None:
-            with open(serialized_tables_report_path, 'r', encoding='utf-8') as f:
-                parsed_report = json.load(f)
-            tables_by_page = self._get_serialized_tables_by_page(parsed_report.get('tables', []))
+        if serialized_tables_document_path is not None:
+            with open(serialized_tables_document_path, 'r', encoding='utf-8') as f:
+                parsed_document = json.load(f)
+            tables_by_page = self._get_serialized_tables_by_page(parsed_document.get('tables', []))
         
         for page in file_content['content']['pages']:
             page_chunks = self._split_page(page)
@@ -84,24 +84,24 @@ class TextSplitter():
             })
         return chunks_with_meta
 
-    def split_all_reports(self, all_report_dir: Path, output_dir: Path, serialized_tables_dir: Optional[Path] = None):
+    def split_all_documents(self, all_documents_dir: Path, output_dir: Path, serialized_tables_dir: Optional[Path] = None):
 
-        all_report_paths = list(all_report_dir.glob("*.json"))
+        all_document_paths = list(all_documents_dir.glob("*.json"))
         
-        for report_path in all_report_paths:
+        for document_path in all_document_paths:
             serialized_tables_path = None
             if serialized_tables_dir is not None:
-                serialized_tables_path = serialized_tables_dir / report_path.name
+                serialized_tables_path = serialized_tables_dir / document_path.name
                 if not serialized_tables_path.exists():
-                    print(f"Warning: Could not find serialized tables report for {report_path.name}")
+                    print(f"Warning: Could not find serialized tables document for {document_path.name}")
                 
-            with open(report_path, 'r', encoding='utf-8') as file:
-                report_data = json.load(file)
+            with open(document_path, 'r', encoding='utf-8') as file:
+                document_data = json.load(file)
                 
-            updated_report = self._split_report(report_data, serialized_tables_path)
+            updated_document = self._split_document(document_data, serialized_tables_path)
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            with open(output_dir / report_path.name, 'w', encoding='utf-8') as file:
-                json.dump(updated_report, file, indent=2, ensure_ascii=False)
+            with open(output_dir / document_path.name, 'w', encoding='utf-8') as file:
+                json.dump(updated_document, file, indent=2, ensure_ascii=False)
                 
-        print(f"Split {len(all_report_paths)} files")
+        print(f"Split {len(all_document_paths)} files")

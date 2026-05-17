@@ -14,40 +14,47 @@ from tenacity import retry, wait_fixed, stop_after_attempt
 
 
 class BM25Ingestor:
-    def __init__(self):
-        pass
-
     def create_bm25_index(self, chunks: List[str]) -> BM25Okapi:
         """Create a BM25 index from a list of text chunks."""
         tokenized_chunks = [chunk.split() for chunk in chunks]
         return BM25Okapi(tokenized_chunks)
-    
-    def process_reports(self, all_reports_dir: Path, output_dir: Path):
-        """Process all reports and save individual BM25 indices.
-        
-        Args:
-            all_reports_dir (Path): Directory containing the JSON report files
-            output_dir (Path): Directory where to save the BM25 indices
-        """
-        output_dir.mkdir(parents=True, exist_ok=True)
-        all_report_paths = list(all_reports_dir.glob("*.json"))
 
-        for report_path in tqdm(all_report_paths, desc="Processing reports for BM25"):
-            # Load the report
-            with open(report_path, 'r', encoding='utf-8') as f:
-                report_data = json.load(f)
-                
-            # Extract text chunks and create BM25 index
-            text_chunks = [chunk['text'] for chunk in report_data['content']['chunks']]
-            bm25_index = self.create_bm25_index(text_chunks)
-            
-            # Save BM25 index
-            sha1_name = report_data["metainfo"]["sha1_name"]
-            output_file = output_dir / f"{sha1_name}.pkl"
-            with open(output_file, 'wb') as f:
-                pickle.dump(bm25_index, f)
-                
-        print(f"Processed {len(all_report_paths)} reports")
+    def process_documents(self, documents_dir: Path, output_path: Path):
+        """Create one global BM25 index for all chunks across all source documents."""
+        document_paths = list(documents_dir.glob("*.json"))
+        all_text_chunks = []
+        chunk_catalog = []
+
+        for document_path in tqdm(document_paths, desc="Preparing chunks for BM25"):
+            with open(document_path, 'r', encoding='utf-8') as file:
+                document_data = json.load(file)
+
+            document_id = document_data.get("metainfo", {}).get("sha1_name", document_path.stem)
+            chunks = document_data.get("content", {}).get("chunks", []) or []
+
+            for chunk in chunks:
+                text = chunk.get("text", "")
+                if not text.strip():
+                    continue
+                all_text_chunks.append(text)
+                chunk_catalog.append({
+                    "document_id": document_id,
+                    "page": chunk.get("page"),
+                    "chunk_id": chunk.get("id"),
+                    "type": chunk.get("type", "content"),
+                    "text": text,
+                })
+
+        output_path.mkdir(parents=True, exist_ok=True)
+        bm25_index = self.create_bm25_index(all_text_chunks)
+
+        with open(output_path / "bm25.pkl", 'wb') as file:
+            pickle.dump(bm25_index, file)
+        with open(output_path / "bm25_chunks.json", 'w', encoding='utf-8') as file:
+            json.dump(chunk_catalog, file, ensure_ascii=False, indent=2)
+
+        print(f"Prepared global BM25 index from {len(chunk_catalog)} chunks across {len(document_paths)} documents")
+
 
 class VectorDBIngestor:
     def __init__(self):
@@ -55,53 +62,68 @@ class VectorDBIngestor:
 
     def _set_up_llm(self):
         load_dotenv()
-        llm = OpenAI(
+        return OpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
             timeout=None,
             max_retries=2
         )
-        return llm
 
     @retry(wait=wait_fixed(20), stop=stop_after_attempt(2))
     def _get_embeddings(self, text: Union[str, List[str]], model: str = "text-embedding-3-large") -> List[float]:
         if isinstance(text, str) and not text.strip():
             raise ValueError("Input text cannot be an empty string.")
-        
+
         if isinstance(text, list):
-            text_chunks = [text[i:i + 1024] for i in range(0, len(text), 1024)]
+            text_batches = [text[i:i + 1024] for i in range(0, len(text), 1024)]
         else:
-            text_chunks = [text]
+            text_batches = [text]
 
         embeddings = []
-        for chunk in text_chunks:
-            response = self.llm.embeddings.create(input=chunk, model=model)
+        for batch in text_batches:
+            response = self.llm.embeddings.create(input=batch, model=model)
             embeddings.extend([embedding.embedding for embedding in response.data])
-        
+
         return embeddings
 
-    def _create_vector_db(self, embeddings: List[float]):
+    def _create_vector_db(self, embeddings: List[List[float]]):
         embeddings_array = np.array(embeddings, dtype=np.float32)
         dimension = len(embeddings[0])
-        index = faiss.IndexFlatIP(dimension)  # Cosine distance
+        index = faiss.IndexFlatIP(dimension)
         index.add(embeddings_array)
         return index
-    
-    def _process_report(self, report: dict):
-        text_chunks = [chunk['text'] for chunk in report['content']['chunks']]
-        embeddings = self._get_embeddings(text_chunks)
-        index = self._create_vector_db(embeddings)
-        return index
 
-    def process_reports(self, all_reports_dir: Path, output_dir: Path):
-        all_report_paths = list(all_reports_dir.glob("*.json"))
+    def process_documents(self, documents_dir: Path, output_dir: Path):
+        """Create one global FAISS index and metadata catalog for all document chunks."""
+        document_paths = list(documents_dir.glob("*.json"))
+        all_text_chunks = []
+        chunk_catalog = []
+
+        for document_path in tqdm(document_paths, desc="Preparing chunks for vector DB"):
+            with open(document_path, 'r', encoding='utf-8') as file:
+                document_data = json.load(file)
+
+            document_id = document_data.get("metainfo", {}).get("sha1_name", document_path.stem)
+            chunks = document_data.get("content", {}).get("chunks", []) or []
+
+            for chunk in chunks:
+                text = chunk.get("text", "")
+                if not text.strip():
+                    continue
+                all_text_chunks.append(text)
+                chunk_catalog.append({
+                    "document_id": document_id,
+                    "page": chunk.get("page"),
+                    "chunk_id": chunk.get("id"),
+                    "type": chunk.get("type", "content"),
+                    "text": text,
+                })
+
         output_dir.mkdir(parents=True, exist_ok=True)
+        embeddings = self._get_embeddings(all_text_chunks)
+        vector_index = self._create_vector_db(embeddings)
 
-        for report_path in tqdm(all_report_paths, desc="Processing reports"):
-            with open(report_path, 'r', encoding='utf-8') as file:
-                report_data = json.load(file)
-            index = self._process_report(report_data)
-            sha1_name = report_data["metainfo"]["sha1_name"]
-            faiss_file_path = output_dir / f"{sha1_name}.faiss"
-            faiss.write_index(index, str(faiss_file_path))
+        faiss.write_index(vector_index, str(output_dir / "global.faiss"))
+        with open(output_dir / "global_chunks.json", 'w', encoding='utf-8') as file:
+            json.dump(chunk_catalog, file, ensure_ascii=False, indent=2)
 
-        print(f"Processed {len(all_report_paths)} reports")
+        print(f"Prepared global vector DB from {len(chunk_catalog)} chunks across {len(document_paths)} documents")

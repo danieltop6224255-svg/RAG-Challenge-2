@@ -87,11 +87,11 @@ class PDFParser:
                 data = conv_res.document.export_to_dict()
                 normalized_data = self._normalize_page_sequence(data)
                 
-                processed_report = processor.assemble_report(conv_res, normalized_data)
+                processed_document = processor.assemble_report(conv_res, normalized_data)
                 doc_filename = conv_res.input.file.stem
                 if self.output_dir is not None:
                     with (self.output_dir / f"{doc_filename}.json").open("w", encoding="utf-8") as fp:
-                        json.dump(processed_report, fp, indent=2, ensure_ascii=False)
+                        json.dump(processed_document, fp, indent=2, ensure_ascii=False)
             else:
                 failure_count += 1
                 _log.info(f"Document {conv_res.input.file} failed to convert.")
