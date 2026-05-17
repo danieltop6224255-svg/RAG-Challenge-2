@@ -13,6 +13,7 @@ from src.ingestion import VectorDBIngestor
 from src.ingestion import BM25Ingestor
 from src.questions_processing import QuestionsProcessor
 from src.tables_serialization import TableSerializer
+from src.url_parsing import URLParser
 
 @dataclass
 class PipelineConfig:
@@ -110,8 +111,7 @@ class Pipeline:
         logging.basicConfig(level=logging.DEBUG)
         
         pdf_parser = PDFParser(
-            output_dir=self.paths.parsed_reports_path,
-            csv_metadata_path=self.paths.subset_path
+            output_dir=self.paths.parsed_reports_path
         )
         pdf_parser.debug_data_path = self.paths.parsed_reports_debug_path
             
@@ -128,8 +128,7 @@ class Pipeline:
         logging.basicConfig(level=logging.DEBUG)
         
         pdf_parser = PDFParser(
-            output_dir=self.paths.parsed_reports_path,
-            csv_metadata_path=self.paths.subset_path
+            output_dir=self.paths.parsed_reports_path
         )
         pdf_parser.debug_data_path = self.paths.parsed_reports_debug_path
 
@@ -207,6 +206,15 @@ class Pipeline:
         else:
             self.parse_pdf_reports_sequential()
     
+
+
+    def parse_url_reports(self, urls: list[str] | list[dict], output_dir: Path = None, crawl_delay: float = 0.5):
+        """Parse URL sources and save them in the same report JSON format used downstream."""
+        target_dir = output_dir or self.paths.merged_reports_path
+        parser = URLParser(output_dir=target_dir, crawl_delay=crawl_delay)
+        parser.parse_urls(urls)
+        print(f"URL reports parsed and saved to {target_dir}")
+
     def process_parsed_reports(self):
         """Process already parsed PDF reports through the pipeline:
         1. Merge to simpler JSON structure

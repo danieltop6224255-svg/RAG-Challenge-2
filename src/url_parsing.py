@@ -1,25 +1,31 @@
+import hashlib
 import json
 import logging
 import re
-import hashlib
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 import trafilatura
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 
 class URLParser:
-    """
-    URLParser extracts text from web pages (using trafilatura) and writes per-URL JSON files
-    to an output directory. Each JSON has the structure:
+    """Parse URLs with trafilatura and export reports in pipeline-compatible JSON.
+
+    Export schema matches processed reports consumed by text splitter/ingestion:
     {
-      "metainfo": {"url": url},
-      "content": {"chunks": None, "pages": [{"page": 1, "text": text}]}
+      "metainfo": {
+        "sha1_name": "...",
+        "source_type": "url",
+        "url": "..."
+      },
+      "content": {
+        "chunks": null,
+        "pages": [{"page": 1, "text": "..."}]
+      }
     }
     """
 
@@ -29,9 +35,9 @@ class URLParser:
         crawl_delay: float = 0.5,
         include_tables: bool = True,
         output_format: str = "markdown",
-        output_dir: Optional[Path] = None
+        output_dir: Optional[Path] = None,
     ):
-        self.user_agent = user_agent or "my-scraper-bot/1.0 (+https://example.com)"
+        self.user_agent = user_agent or "rag-challenge-url-parser/1.0"
         self.crawl_delay = crawl_delay
         self.include_tables = include_tables
         self.output_format = output_format if output_format in ("plain", "markdown") else "markdown"
@@ -45,84 +51,75 @@ class URLParser:
             html,
             include_comments=False,
             include_tables=self.include_tables,
-            output_format=self.output_format
+            output_format=self.output_format,
         )
 
     def _fetch_with_trafilatura(self, url: str) -> Optional[str]:
         try:
-            downloaded = trafilatura.fetch_url(url)
-            return downloaded
-        except Exception as e:
-            logger.debug("trafilatura.fetch_url error for %s: %s", url, e)
+            return trafilatura.fetch_url(url)
+        except Exception as error:
+            logger.debug("trafilatura.fetch_url error for %s: %s", url, error)
             return None
 
-    def _safe_filename(self, url: str, suffix: str = "_data.json") -> str:
-        """
-        Create a filesystem-safe filename from a URL.
-        Keeps human-readable parts (netloc + path) but replaces non-alnum with underscores
-        and appends a short SHA1 hash for uniqueness.
-        """
+    def _safe_filename(self, url: str, suffix: str = ".json") -> str:
         parsed = urlparse(url)
         base = parsed.netloc + parsed.path
         if parsed.query:
             base += "?" + parsed.query
-        # replace non-alphanumeric characters with underscore
-        name = re.sub(r'[^0-9A-Za-z]+', '_', base).strip('_')
+        name = re.sub(r"[^0-9A-Za-z]+", "_", base).strip("_")
         if not name:
-            name = hashlib.sha1(url.encode('utf-8')).hexdigest()
-        # limit length for safety
-        max_base_len = 200
-        if len(name) > max_base_len:
-            name = name[:max_base_len]
-        short_hash = hashlib.sha1(url.encode('utf-8')).hexdigest()[:8]
-        filename = f"{name}_{short_hash}{suffix}"
-        return filename
+            name = hashlib.sha1(url.encode("utf-8")).hexdigest()
+        if len(name) > 200:
+            name = name[:200]
+        short_hash = hashlib.sha1(url.encode("utf-8")).hexdigest()[:8]
+        return f"{name}_{short_hash}{suffix}"
 
-    def parse_urls(self, urls: List[str]) -> None:
-        """
-        Parse a list of URLs, extract text with trafilatura and write each result to a JSON file
-        in self.output_dir. The function does not return anything; results are saved to disk.
+    @staticmethod
+    def _get_sha1_name(url: str) -> str:
+        return hashlib.sha1(url.encode("utf-8")).hexdigest()
 
-        JSON format:
-        {
-          "metainfo": {"url": url},
-          "content": {"chunks": None, "pages": [{"page": 1, "text": text}]}
+    def _build_output_payload(self, url: str, text: str) -> Dict:
+        sha1_name = self._get_sha1_name(url)
+
+        return {
+            "metainfo": {
+                "sha1_name": sha1_name,
+                "source_type": "url",
+                "url": url,
+            },
+            "content": {"chunks": None, "pages": [{"page": 1, "text": text}]},
         }
+
+    def parse_urls(self, urls: List[Union[str, Dict[str, str]]]) -> None:
+        """Parse URL list and write one JSON report per URL.
+
+        `urls` accepts either:
+        - list[str]
+        - list[{"url": "..."}]
         """
-        for i, url in enumerate(urls):
-            logger.info("Parsing %d/%d: %s", i + 1, len(urls), url)
-            time.sleep(self.crawl_delay)  # polite delay
+        for index, item in enumerate(urls):
+            if isinstance(item, str):
+                url = item
+            else:
+                url = item.get("url", "")
 
-            text = ""
-
-            # 1) Attempt: trafilatura.fetch_url()
-            downloaded = self._fetch_with_trafilatura(url)
-            if downloaded:
-                logger.debug("trafilatura.fetch_url returned HTML for %s", url)
-                extracted = self._extract_with_trafilatura(downloaded)
-                if extracted:
-                    text = extracted
-
-            if not text:
-                logger.warning("Failed to extract text from %s (skipping url)", url)
+            if not url:
+                logger.warning("Skipping malformed URL record at index %d", index)
                 continue
 
-            json_obj = {
-                "metainfo": {"url": url},
-                "content": {
-                    "chunks": None,
-                    "pages": [
-                        {"page": 1, "text": text or ""}
-                    ]
-                }
-            }
+            logger.info("Parsing %d/%d: %s", index + 1, len(urls), url)
+            time.sleep(self.crawl_delay)
 
-            filename = self._safe_filename(url)
-            out_path = self.output_dir / filename
+            downloaded = self._fetch_with_trafilatura(url)
+            extracted_text = self._extract_with_trafilatura(downloaded) if downloaded else None
 
-            try:
-                with out_path.open("w", encoding="utf-8") as f:
-                    json.dump(json_obj, f, ensure_ascii=False, indent=2)
-                logger.info("Saved parsed data to %s", out_path)
-            except Exception as e:
-                logger.error("Failed to write JSON for %s to %s: %s", url, out_path, e)
+            if not extracted_text:
+                logger.warning("Failed to extract text from %s (skipping)", url)
+                continue
+
+            json_obj = self._build_output_payload(url, extracted_text)
+            out_path = self.output_dir / self._safe_filename(url)
+
+            with out_path.open("w", encoding="utf-8") as file:
+                json.dump(json_obj, file, ensure_ascii=False, indent=2)
+            logger.info("Saved parsed URL data to %s", out_path)
