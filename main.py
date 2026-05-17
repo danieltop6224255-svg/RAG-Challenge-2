@@ -57,6 +57,36 @@ def parse_urls(urls_file, crawl_delay):
     pipeline.parse_url_documents(urls=urls, crawl_delay=crawl_delay)
 
 
+
+
+@cli.command()
+@click.option('--urls-file', default='urls.json', help='URLs file (.json/.yaml/.yml). Supports ["https://..."] or [{"url": "..."}]')
+@click.option('--crawl-delay', default=0.5, help='Delay between URL requests in seconds')
+def parse_urls(urls_file, crawl_delay):
+    """Parse URL pages and save them in pipeline-compatible JSON format."""
+    root_path = Path.cwd()
+    pipeline = Pipeline(root_path)
+
+    urls_path = root_path / urls_file
+    if not urls_path.exists():
+        raise click.ClickException(f"URLs file not found: {urls_path}")
+
+    suffix = urls_path.suffix.lower()
+    with urls_path.open('r', encoding='utf-8') as file:
+        if suffix == '.json':
+            urls = json.load(file)
+        elif suffix in {'.yaml', '.yml'}:
+            urls = yaml.safe_load(file)
+        else:
+            raise click.ClickException(f"Unsupported URLs file format: {suffix}. Use .json, .yaml, or .yml")
+
+    if not isinstance(urls, list):
+        raise click.ClickException("URLs file must contain a list of URLs or URL objects")
+
+    click.echo(f"Parsing URLs from {urls_path}...")
+    pipeline.parse_url_reports(urls=urls, crawl_delay=crawl_delay)
+
+
 @cli.command()
 @click.option('--max-workers', default=10, help='Number of workers for table serialization')
 def serialize_tables(max_workers):
