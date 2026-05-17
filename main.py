@@ -69,14 +69,14 @@ def serialize_tables(max_workers):
 
 @cli.command()
 @click.option('--config', type=click.Choice(['ser_tab', 'no_ser_tab']), default='no_ser_tab', help='Configuration preset to use')
-def process_reports(config):
-    """Process parsed reports through the pipeline stages."""
+def process_documents(config):
+    """Process parsed source documents through the pipeline stages."""
     root_path = Path.cwd()
     run_config = preprocess_configs[config]
     pipeline = Pipeline(root_path, run_config=run_config)
     
-    click.echo(f"Processing parsed reports (config={config})...")
-    pipeline.process_parsed_reports()
+    click.echo(f"Processing parsed documents (config={config})...")
+    pipeline.process_parsed_documents()
 
 @cli.command()
 @click.option('--config', type=click.Choice(['base', 'pdr', 'max', 'max_no_ser_tab', 'max_nst_o3m', 'max_st_o3m', 'ibm_llama70b', 'ibm_llama8b', 'gemini_thinking']), default='base', help='Configuration preset to use')

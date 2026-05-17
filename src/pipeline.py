@@ -152,8 +152,8 @@ class Pipeline:
     def merge_reports(self):
         """Merge complex JSON reports into a simpler structure with a list of pages, where all text blocks are combined into a single string."""
         ptp = PageTextPreparation(use_serialized_tables=self.run_config.use_serialized_tables)
-        _ = ptp.process_reports(
-            reports_dir=self.paths.parsed_reports_path,
+        _ = ptp.process_documents(
+            input_dir=self.paths.parsed_reports_path,
             output_dir=self.paths.merged_reports_path
         )
         print(f"Reports saved to {self.paths.merged_reports_path}")
@@ -210,21 +210,21 @@ class Pipeline:
 
     def parse_url_reports(self, urls: list[str] | list[dict], output_dir: Path = None, crawl_delay: float = 0.5):
         """Parse URL sources and save them in the same report JSON format used downstream."""
-        target_dir = output_dir or self.paths.merged_reports_path
+        target_dir = output_dir or self.paths.parsed_reports_path
         parser = URLParser(output_dir=target_dir, crawl_delay=crawl_delay)
         parser.parse_urls(urls)
         print(f"URL reports parsed and saved to {target_dir}")
 
-    def process_parsed_reports(self):
-        """Process already parsed PDF reports through the pipeline:
-        1. Merge to simpler JSON structure
+    def process_parsed_documents(self):
+        """Process parsed source documents through the pipeline:
+        1. Merge/normalize to unified JSON structure
         2. Export to markdown
-        3. Chunk the reports
+        3. Chunk the documents
         4. Create vector databases
         """
-        print("Starting reports processing pipeline...")
+        print("Starting documents processing pipeline...")
         
-        print("Step 1: Merging reports...")
+        print("Step 1: Merging/normalizing documents...")
         self.merge_reports()
         
         print("Step 2: Exporting reports to markdown...")
@@ -236,8 +236,12 @@ class Pipeline:
         print("Step 4: Creating vector databases...")
         self.create_vector_dbs()
         
-        print("Reports processing pipeline completed successfully!")
+        print("Documents processing pipeline completed successfully!")
         
+    def process_parsed_reports(self):
+        """Backward-compatible alias for process_parsed_documents."""
+        self.process_parsed_documents()
+
     def _get_next_available_filename(self, base_path: Path) -> Path:
         """
         Returns the next available filename by adding a numbered suffix if the file exists.

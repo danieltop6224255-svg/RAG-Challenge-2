@@ -14,46 +14,60 @@ class PageTextPreparation:
         self.use_serialized_tables = use_serialized_tables
         self.serialized_tables_instead_of_markdown = serialized_tables_instead_of_markdown
 
-    def process_reports(
-        self, 
-        reports_dir: Path = None, 
-        reports_paths: List[Path] = None, 
+    def process_documents(
+        self,
+        input_dir: Path = None,
+        input_paths: List[Path] = None,
         output_dir: Path = None
     ):
         """
-        Process reports from a directory or list of paths, returning a list of processed reports 
+        Process documents from a directory or list of paths, returning a list of processed documents 
         and saving them to an output directory if specified.
         """
-        all_reports = []
-        
-        if reports_dir:
-            reports_paths = list(reports_dir.glob('*.json'))
-        
-        for report_path in reports_paths:
-            with open(report_path, 'r', encoding='utf-8') as file:
-                report_data = json.load(file)
-            
-            full_report_text = self.process_report(report_data)
-            report = {"metainfo": report_data['metainfo'], "content": full_report_text}
-            all_reports.append(report)
-            
+        all_documents = []
+
+        if input_dir:
+            input_paths = list(input_dir.glob('*.json'))
+
+        for input_path in input_paths:
+            with open(input_path, 'r', encoding='utf-8') as file:
+                document_data = json.load(file)
+
+            processed_content = self.process_document(document_data)
+            document = {"metainfo": document_data.get('metainfo', {}), "content": processed_content}
+            if "tables" in document_data:
+                document["tables"] = document_data["tables"]
+            all_documents.append(document)
+
             if output_dir:
                 output_dir.mkdir(parents=True, exist_ok=True)
-                with open(output_dir / report_path.name, 'w', encoding='utf-8') as file:
-                    json.dump(report, file, indent=2, ensure_ascii=False)
+                with open(output_dir / input_path.name, 'w', encoding='utf-8') as file:
+                    json.dump(document, file, indent=2, ensure_ascii=False)
+
+        return all_documents
         
-        return all_reports
-        
-    def process_report(self, report_data):
+    def process_document(self, document_data):
         """
         Process a single report, returning a list of processed pages and printing a message if corrections were made.
         """
-        self.report_data = report_data
+        self.report_data = document_data
         processed_pages = []
         total_corrections = 0
         corrections_list = []
 
-        for page_content in self.report_data["content"]:
+        raw_content = self.report_data.get("content", [])
+
+        if isinstance(raw_content, dict) and "pages" in raw_content:
+            processed_pages = []
+            for page in raw_content.get("pages", []):
+                cleaned_text, corrections_count, corrections = self._clean_text(page.get("text", ""))
+                total_corrections += corrections_count
+                corrections_list.extend(corrections)
+                processed_pages.append({"page": page.get("page", 1), "text": cleaned_text})
+
+            return {"chunks": None, "pages": processed_pages}
+
+        for page_content in raw_content:
             page_number = page_content["page"]
             page_text = self.prepare_page_text(page_number)
             cleaned_text, corrections_count, corrections = self._clean_text(page_text)
@@ -411,6 +425,14 @@ class PageTextPreparation:
             combined_text = f"{markdown}\nDescription of the table entities:\n{serialized_text}"
             return combined_text
 
+
+    # Backward compatibility wrappers
+    def process_reports(self, reports_dir: Path = None, reports_paths: List[Path] = None, output_dir: Path = None):
+        return self.process_documents(input_dir=reports_dir, input_paths=reports_paths, output_dir=output_dir)
+
+    def process_report(self, report_data):
+        return self.process_document(report_data)
+
     def export_to_markdown(self, reports_dir: Path, output_dir: Path):
         """Export processed reports to markdown files.
         
@@ -424,7 +446,7 @@ class PageTextPreparation:
             with open(report_path, 'r', encoding='utf-8') as f:
                 report_data = json.load(f)
             
-            processed_report = self.process_report(report_data)
+            processed_report = self.process_document(report_data)
             
             document_text = ""
             for page in processed_report['pages']:
