@@ -15,16 +15,14 @@ from docling.datamodel.document import ConversionResult
 
 _log = logging.getLogger(__name__)
 
-def _process_chunk(pdf_paths, pdf_backend, output_dir, num_threads, metadata_lookup, debug_data_path):
+def _process_chunk(pdf_paths, pdf_backend, output_dir, num_threads, debug_data_path):
     """Helper function to process a chunk of PDFs in a separate process."""
     # Create a new parser instance for this process
     parser = PDFParser(
         pdf_backend=pdf_backend,
         output_dir=output_dir,
         num_threads=num_threads,
-        csv_metadata_path=None  # Metadata lookup is passed directly
     )
-    parser.metadata_lookup = metadata_lookup
     parser.debug_data_path = debug_data_path
     parser.parse_and_export(pdf_paths)
     return f"Processed {len(pdf_paths)} PDFs."
@@ -35,36 +33,15 @@ class PDFParser:
         pdf_backend=DoclingParseV2DocumentBackend,
         output_dir: Path = Path("./parsed_pdfs"),
         num_threads: int = None,
-        csv_metadata_path: Path = None,
     ):
         self.pdf_backend = pdf_backend
         self.output_dir = output_dir
         self.doc_converter = self._create_document_converter()
         self.num_threads = num_threads
-        self.metadata_lookup = {}
         self.debug_data_path = None
 
-        if csv_metadata_path is not None:
-            self.metadata_lookup = self._parse_csv_metadata(csv_metadata_path)
-            
         if self.num_threads is not None:
             os.environ["OMP_NUM_THREADS"] = str(self.num_threads)
-
-    @staticmethod
-    def _parse_csv_metadata(csv_path: Path) -> dict:
-        """Parse CSV file and create a lookup dictionary with sha1 as key."""
-        import csv
-        metadata_lookup = {}
-        
-        with open(csv_path, 'r', encoding='utf-8') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                # Handle both old and new CSV formats for company name
-                company_name = row.get('company_name', row.get('name', '')).strip('"')
-                metadata_lookup[row['sha1']] = {
-                    'company_name': company_name
-                }
-        return metadata_lookup
 
     def _create_document_converter(self) -> "DocumentConverter": # type: ignore
         """Creates and returns a DocumentConverter with default pipeline options."""
@@ -104,17 +81,17 @@ class PDFParser:
         for conv_res in conv_results:
             if conv_res.status == ConversionStatus.SUCCESS:
                 success_count += 1
-                processor = JsonReportProcessor(metadata_lookup=self.metadata_lookup, debug_data_path=self.debug_data_path)
+                processor = JsonReportProcessor(debug_data_path=self.debug_data_path)
                 
                 # Normalize the document data to ensure sequential pages
                 data = conv_res.document.export_to_dict()
                 normalized_data = self._normalize_page_sequence(data)
                 
-                processed_report = processor.assemble_report(conv_res, normalized_data)
+                processed_document = processor.assemble_report(conv_res, normalized_data)
                 doc_filename = conv_res.input.file.stem
                 if self.output_dir is not None:
                     with (self.output_dir / f"{doc_filename}.json").open("w", encoding="utf-8") as fp:
-                        json.dump(processed_report, fp, indent=2, ensure_ascii=False)
+                        json.dump(processed_document, fp, indent=2, ensure_ascii=False)
             else:
                 failure_count += 1
                 _log.info(f"Document {conv_res.input.file} failed to convert.")
@@ -227,7 +204,6 @@ class PDFParser:
                     self.pdf_backend,
                     self.output_dir,
                     self.num_threads,
-                    self.metadata_lookup,
                     self.debug_data_path
                 )
                 for chunk in chunks
@@ -248,8 +224,7 @@ class PDFParser:
 
 
 class JsonReportProcessor:
-    def __init__(self, metadata_lookup: dict = None, debug_data_path: Path = None):
-        self.metadata_lookup = metadata_lookup or {}
+    def __init__(self, debug_data_path: Path = None):
         self.debug_data_path = debug_data_path
 
     def assemble_report(self, conv_result, normalized_data=None):
@@ -274,11 +249,6 @@ class JsonReportProcessor:
         metainfo['equations_amount'] = len(data.get('equations', []))
         metainfo['footnotes_amount'] = len([t for t in data.get('texts', []) if t.get('label') == 'footnote'])
         
-        # Add CSV metadata if available
-        if self.metadata_lookup and sha1_name in self.metadata_lookup:
-            csv_meta = self.metadata_lookup[sha1_name]
-            metainfo['company_name'] = csv_meta['company_name']
-            
         return metainfo
 
     def process_table(self, table_data):
