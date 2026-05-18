@@ -238,6 +238,10 @@ class Pipeline:
         
         print("Documents processing pipeline completed successfully!")
         
+    def process_parsed_reports(self):
+        """Backward-compatible alias for process_parsed_documents."""
+        self.process_parsed_documents()
+
     def _get_next_available_filename(self, base_path: Path) -> Path:
         """
         Returns the next available filename by adding a numbered suffix if the file exists.
