@@ -70,6 +70,47 @@ Output:
     system_prompt_with_schema = build_system_prompt(instruction, example, pydantic_schema)
 
 
+
+
+class SubQuestionsPrompt:
+    instruction = """
+You analyze user questions for decomposition.
+Decide whether a question should be split into multiple independent sub-questions.
+Only split when answering accurately requires separate retrieval/answering steps.
+"""
+
+    class SubQuestionsSchema(BaseModel):
+        is_multi_question: bool = Field(description="Whether the question should be decomposed into multiple sub-questions")
+        sub_questions: List[str] = Field(description="List of standalone sub-questions. Empty if no split is needed")
+
+    pydantic_schema = re.sub(r"^ {4}", "", inspect.getsource(SubQuestionsSchema), flags=re.MULTILINE)
+
+    example = r"""
+Example 1:
+Question: "What is the revenue of company A in 2023?"
+Output:
+{
+  "is_multi_question": false,
+  "sub_questions": []
+}
+
+Example 2:
+Question: "Compare total assets of Apple and Microsoft in 2022 and say who is higher"
+Output:
+{
+  "is_multi_question": true,
+  "sub_questions": [
+    "What were Apple's total assets in 2022?",
+    "What were Microsoft's total assets in 2022?"
+  ]
+}
+"""
+
+    user_prompt = 'Question: "{question}"'
+    system_prompt = build_system_prompt(instruction, example)
+    system_prompt_with_schema = build_system_prompt(instruction, example, pydantic_schema)
+
+
 class AnswerWithRAGContextSharedPrompt:
     instruction = """
 You are a RAG (Retrieval-Augmented Generation) answering system.
