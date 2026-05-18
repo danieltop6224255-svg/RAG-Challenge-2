@@ -5,7 +5,6 @@ from pathlib import Path
 from src.retrieval import VectorRetriever, HybridRetriever
 from src.api_requests import APIProcessor
 from tqdm import tqdm
-import pandas as pd
 import threading
 import concurrent.futures
 
@@ -62,26 +61,18 @@ class QuestionsProcessor:
         for result in retrieval_results:
             page_number = result['page']
             text = result['text']
-            context_parts.append(f'Text retrieved from page {page_number}: \n"""\n{text}\n"""')
+            document_id = result.get('document_id', 'unknown')
+            context_parts.append(f'Document {document_id}, page {page_number}: \n"""\n{text}\n"""')
             
         return "\n\n---\n\n".join(context_parts)
 
-    def _extract_references(self, pages_list: list, company_name: str) -> list:
-        # Load companies data
-        if self.subset_path is None:
-            raise ValueError("subset_path is required for new challenge pipeline when processing references.")
-        self.companies_df = pd.read_csv(self.subset_path)
-
-        # Find the company's SHA1 from the subset CSV
-        matching_rows = self.companies_df[self.companies_df['company_name'] == company_name]
-        if matching_rows.empty:
-            company_sha1 = ""
-        else:
-            company_sha1 = matching_rows.iloc[0]['sha1']
-
+    def _extract_references(self, retrieval_results: list) -> list:
         refs = []
-        for page in pages_list:
-            refs.append({"pdf_sha1": company_sha1, "page_index": page})
+        for result in retrieval_results:
+            refs.append({
+                "document_id": result.get("document_id"),
+                "page_index": result.get("page")
+            })
         return refs
 
     def _validate_page_references(self, claimed_pages: list, retrieval_results: list, min_pages: int = 2, max_pages: int = 8) -> list:
@@ -118,33 +109,22 @@ class QuestionsProcessor:
         
         return validated_pages
 
-    def get_answer_for_company(self, company_name: str, question: str, schema: str) -> dict:
+    def get_answer_for_query(self, question: str, schema: str) -> dict:
 
         if self.llm_reranking:
-            retriever = HybridRetriever(
-                vector_db_dir=self.vector_db_dir,
-                documents_dir=self.documents_dir
-            )
-        else:
-            retriever = VectorRetriever(
-                vector_db_dir=self.vector_db_dir,
-                documents_dir=self.documents_dir
-            )
-
-        if self.full_context:
-            retrieval_results = retriever.retrieve_all(company_name)
-        else:           
-            retrieval_results = retriever.retrieve_by_company_name(
-                company_name=company_name,
+            retriever = HybridRetriever(vector_db_dir=self.vector_db_dir)
+            retrieval_results = retriever.retrieve(
                 query=question,
                 llm_reranking_sample_size=self.llm_reranking_sample_size,
                 top_n=self.top_n_retrieval,
-                return_parent_pages=self.return_parent_pages
             )
-        
+        else:
+            retriever = VectorRetriever(vector_db_dir=self.vector_db_dir)
+            retrieval_results = retriever.retrieve(query=question, top_n=self.top_n_retrieval)
+
         if not retrieval_results:
             raise ValueError("No relevant context found")
-        
+
         rag_context = self._format_retrieval_results(retrieval_results)
         answer_dict = self.openai_processor.get_answer_from_rag_context(
             question=question,
@@ -153,50 +133,24 @@ class QuestionsProcessor:
             model=self.answering_model
         )
         self.response_data = self.openai_processor.response_data
-        if self.new_challenge_pipeline:
-            pages = answer_dict.get("relevant_pages", [])
-            validated_pages = self._validate_page_references(pages, retrieval_results)
-            answer_dict["relevant_pages"] = validated_pages
-            answer_dict["references"] = self._extract_references(validated_pages, company_name)
+        pages = answer_dict.get("relevant_pages", [])
+        validated_pages = self._validate_page_references(pages, retrieval_results)
+        answer_dict["relevant_pages"] = validated_pages
+        answer_dict["references"] = self._extract_references(retrieval_results)
         return answer_dict
 
-    def _extract_companies_from_subset(self, question_text: str) -> list[str]:
-        """Extract company names from a question by matching against companies in the subset file."""
-        if not hasattr(self, 'companies_df'):
-            if self.subset_path is None:
-                raise ValueError("subset_path must be provided to use subset extraction")
-            self.companies_df = pd.read_csv(self.subset_path)
-        
-        found_companies = []
-        company_names = sorted(self.companies_df['company_name'].unique(), key=len, reverse=True)
-        
-        for company in company_names:
-            escaped_company = re.escape(company)
-            
-            pattern = rf'{escaped_company}(?:\W|$)'
-            
-            if re.search(pattern, question_text, re.IGNORECASE):
-                found_companies.append(company)
-                question_text = re.sub(pattern, '', question_text, flags=re.IGNORECASE)
-        
-        return found_companies
+    def _get_sub_questions(self, question_text: str) -> list[str]:
+        """Use LLM to decide whether question should be decomposed."""
+        return self.openai_processor.get_sub_questions(question_text)
 
     def process_question(self, question: str, schema: str):
-        if self.new_challenge_pipeline:
-            extracted_companies = self._extract_companies_from_subset(question)
-        else:
-            extracted_companies = re.findall(r'"([^"]*)"', question)
-        
-        if len(extracted_companies) == 0:
-            raise ValueError("No company name found in the question.")
-        
-        if len(extracted_companies) == 1:
-            company_name = extracted_companies[0]
-            answer_dict = self.get_answer_for_company(company_name=company_name, question=question, schema=schema)
-            return answer_dict
-        else:
-            return self.process_comparative_question(question, extracted_companies, schema)
-    
+        sub_questions = self._get_sub_questions(question)
+
+        if len(sub_questions) <= 1:
+            return self.get_answer_for_query(question=question, schema=schema)
+
+        return self.process_comparative_question(question, sub_questions, schema)
+
     def _create_answer_detail_ref(self, answer_dict: dict, question_index: int) -> str:
         """Create a reference ID for answer details and store the details"""
         ref_id = f"#/answer_details/{question_index}"
@@ -392,7 +346,7 @@ class QuestionsProcessor:
                 # Convert page indices from one-based to zero-based (competition requires 0-based page indices, but for debugging it is easier to use 1-based)
                 references = [
                     {
-                        "pdf_sha1": ref["pdf_sha1"],
+                        "document_id": ref["document_id"],
                         "page_index": ref["page_index"] - 1
                     }
                     for ref in references
@@ -450,58 +404,52 @@ class QuestionsProcessor:
         )
         return result
 
-    def process_comparative_question(self, question: str, companies: List[str], schema: str) -> dict:
+    def process_comparative_question(self, question: str, sub_questions: List[str], schema: str) -> dict:
         """
-        Process a question involving multiple companies in parallel:
-        1. Rephrase the comparative question into individual questions
-        2. Process each individual question using parallel threads
-        3. Combine results into final comparative answer
+        Process a complex question by answering generated sub-questions in parallel
+        and then composing a final comparative answer
         """
         # Step 1: Rephrase the comparative question
         rephrased_questions = self.openai_processor.get_rephrased_questions(
             original_question=question,
-            companies=companies
+            companies=targets
         )
         
         individual_answers = {}
         aggregated_references = []
         
         # Step 2: Process each individual question in parallel
-        def process_company_question(company: str) -> tuple[str, dict]:
+        def process_target_question(target: str) -> tuple[str, dict]:
             """Helper function to process one company's question and return (company, answer)"""
-            sub_question = rephrased_questions.get(company)
+            sub_question = rephrased_questions.get(target)
             if not sub_question:
-                raise ValueError(f"Could not generate sub-question for company: {company}")
+                raise ValueError(f"Could not generate sub-question for target: {target}")
             
-            answer_dict = self.get_answer_for_company(
-                company_name=company, 
-                question=sub_question, 
-                schema="number"
-            )
-            return company, answer_dict
+            answer_dict = self.get_answer_for_query(question=sub_question, schema="number")
+            return target, answer_dict
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future_to_company = {
+            future_to_target = {
                 executor.submit(process_company_question, company): company 
-                for company in companies
+                for target in targets
             }
             
-            for future in concurrent.futures.as_completed(future_to_company):
+            for future in concurrent.futures.as_completed(future_to_target):
                 try:
-                    company, answer_dict = future.result()
-                    individual_answers[company] = answer_dict
+                    target, answer_dict = future.result()
+                    individual_answers[target] = answer_dict
                     
                     company_references = answer_dict.get("references", [])
                     aggregated_references.extend(company_references)
                 except Exception as e:
-                    company = future_to_company[future]
+                    company = future_to_target[future]
                     print(f"Error processing company {company}: {str(e)}")
                     raise
         
         # Remove duplicate references
         unique_refs = {}
         for ref in aggregated_references:
-            key = (ref.get("pdf_sha1"), ref.get("page_index"))
+            key = (ref.get("document_id"), ref.get("page_index"))
             unique_refs[key] = ref
         aggregated_references = list(unique_refs.values())
         

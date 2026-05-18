@@ -468,6 +468,22 @@ class APIProcessor:
         questions_dict = {item["company_name"]: item["question"] for item in answer_dict["questions"]}
         
         return questions_dict
+    def get_sub_questions(self, question: str) -> List[str]:
+        """Ask LLM whether question should be decomposed and return sub-questions if needed."""
+        answer_dict = self.processor.send_message(
+            system_content=prompts.SubQuestionsPrompt.system_prompt,
+            human_content=prompts.SubQuestionsPrompt.user_prompt.format(question=question),
+            is_structured=True,
+            response_format=prompts.SubQuestionsPrompt.SubQuestionsSchema
+        )
+
+        if not answer_dict.get("is_multi_question", False):
+            return []
+
+        sub_questions = [q.strip() for q in answer_dict.get("sub_questions", []) if isinstance(q, str) and q.strip()]
+        return sub_questions
+
+
 
 
 class AsyncOpenaiProcessor:
