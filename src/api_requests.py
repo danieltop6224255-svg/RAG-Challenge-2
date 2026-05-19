@@ -405,8 +405,8 @@ class APIProcessor:
             **kwargs
         )
 
-    def get_answer_from_rag_context(self, question, rag_context, schema, model):
-        system_prompt, response_format, user_prompt = self._build_rag_context_prompts(schema)
+    def get_answer_from_rag_context(self, question, rag_context, model, is_comparative: bool = False):
+        system_prompt, response_format, user_prompt = self._build_rag_context_prompts(is_comparative=is_comparative)
         
         answer_dict = self.processor.send_message(
             model=model,
@@ -419,37 +419,19 @@ class APIProcessor:
         return answer_dict
 
 
-    def _build_rag_context_prompts(self, schema):
-        """Return prompts tuple for the given schema."""
+    def _build_rag_context_prompts(self, is_comparative: bool = False):
+        """Return prompts tuple for RAG answering."""
         use_schema_prompt = True if self.provider == "ibm" or self.provider == "gemini" else False
-        
-        if schema == "name":
-            system_prompt = (prompts.AnswerWithRAGContextNamePrompt.system_prompt_with_schema 
-                            if use_schema_prompt else prompts.AnswerWithRAGContextNamePrompt.system_prompt)
-            response_format = prompts.AnswerWithRAGContextNamePrompt.AnswerSchema
-            user_prompt = prompts.AnswerWithRAGContextNamePrompt.user_prompt
-        elif schema == "number":
-            system_prompt = (prompts.AnswerWithRAGContextNumberPrompt.system_prompt_with_schema
-                            if use_schema_prompt else prompts.AnswerWithRAGContextNumberPrompt.system_prompt)
-            response_format = prompts.AnswerWithRAGContextNumberPrompt.AnswerSchema
-            user_prompt = prompts.AnswerWithRAGContextNumberPrompt.user_prompt
-        elif schema == "boolean":
-            system_prompt = (prompts.AnswerWithRAGContextBooleanPrompt.system_prompt_with_schema
-                            if use_schema_prompt else prompts.AnswerWithRAGContextBooleanPrompt.system_prompt)
-            response_format = prompts.AnswerWithRAGContextBooleanPrompt.AnswerSchema
-            user_prompt = prompts.AnswerWithRAGContextBooleanPrompt.user_prompt
-        elif schema == "names":
-            system_prompt = (prompts.AnswerWithRAGContextNamesPrompt.system_prompt_with_schema
-                            if use_schema_prompt else prompts.AnswerWithRAGContextNamesPrompt.system_prompt)
-            response_format = prompts.AnswerWithRAGContextNamesPrompt.AnswerSchema
-            user_prompt = prompts.AnswerWithRAGContextNamesPrompt.user_prompt
-        elif schema == "comparative":
+        if is_comparative:
             system_prompt = (prompts.ComparativeAnswerPrompt.system_prompt_with_schema
                             if use_schema_prompt else prompts.ComparativeAnswerPrompt.system_prompt)
             response_format = prompts.ComparativeAnswerPrompt.AnswerSchema
             user_prompt = prompts.ComparativeAnswerPrompt.user_prompt
         else:
-            raise ValueError(f"Unsupported schema: {schema}")
+            system_prompt = (prompts.AnswerWithRAGContextPrompt.system_prompt_with_schema
+                            if use_schema_prompt else prompts.AnswerWithRAGContextPrompt.system_prompt)
+            response_format = prompts.AnswerWithRAGContextPrompt.AnswerSchema
+            user_prompt = prompts.AnswerWithRAGContextPrompt.user_prompt
         return system_prompt, response_format, user_prompt
 
     def get_rephrased_questions(self, original_question: str, companies: List[str]) -> Dict[str, str]:

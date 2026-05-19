@@ -109,7 +109,7 @@ class QuestionsProcessor:
         
         return validated_pages
 
-    def get_answer_for_query(self, question: str, schema: str) -> dict:
+    def get_answer_for_query(self, question: str) -> dict:
 
         if self.llm_reranking:
             retriever = HybridRetriever(vector_db_dir=self.vector_db_dir)
@@ -129,7 +129,6 @@ class QuestionsProcessor:
         answer_dict = self.openai_processor.get_answer_from_rag_context(
             question=question,
             rag_context=rag_context,
-            schema=schema,
             model=self.answering_model
         )
         self.response_data = self.openai_processor.response_data
@@ -143,13 +142,13 @@ class QuestionsProcessor:
         """Use LLM to decide whether question should be decomposed."""
         return self.openai_processor.get_sub_questions(question_text)
 
-    def process_question(self, question: str, schema: str):
+    def process_question(self, question: str):
         sub_questions = self._get_sub_questions(question)
 
         if len(sub_questions) <= 1:
-            return self.get_answer_for_query(question=question, schema=schema)
+            return self.get_answer_for_query(question=question)
 
-        return self.process_comparative_question(question, sub_questions, schema)
+        return self.process_comparative_question(question, sub_questions)
 
     def _create_answer_detail_ref(self, answer_dict: dict, question_index: int) -> str:
         """Create a reference ID for answer details and store the details"""
@@ -229,7 +228,7 @@ class QuestionsProcessor:
             question_text = question_data.get("question")
             schema = question_data.get("schema")
         try:
-            answer_dict = self.process_question(question_text, schema)
+            answer_dict = self.process_question(question_text)
             
             if "error" in answer_dict:
                 detail_ref = self._create_answer_detail_ref({
@@ -404,64 +403,40 @@ class QuestionsProcessor:
         )
         return result
 
-    def process_comparative_question(self, question: str, sub_questions: List[str], schema: str) -> dict:
-        """
-        Process a complex question by answering generated sub-questions in parallel
-        and then composing a final comparative answer
-        """
-        # Step 1: Rephrase the comparative question
-        rephrased_questions = self.openai_processor.get_rephrased_questions(
-            original_question=question,
-            companies=targets
-        )
-        
+    def process_comparative_question(self, question: str, sub_questions: List[str]) -> dict:
+        """Process a complex question by answering sub-questions in parallel and composing a final answer."""
         individual_answers = {}
         aggregated_references = []
-        
-        # Step 2: Process each individual question in parallel
-        def process_target_question(target: str) -> tuple[str, dict]:
-            """Helper function to process one company's question and return (company, answer)"""
-            sub_question = rephrased_questions.get(target)
-            if not sub_question:
-                raise ValueError(f"Could not generate sub-question for target: {target}")
-            
-            answer_dict = self.get_answer_for_query(question=sub_question, schema="number")
-            return target, answer_dict
+
+        def process_sub_question(sub_question: str) -> tuple[str, dict]:
+            answer_dict = self.get_answer_for_query(question=sub_question)
+            return sub_question, answer_dict
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future_to_target = {
-                executor.submit(process_company_question, company): company 
-                for target in targets
+            future_to_sub_question = {
+                executor.submit(process_sub_question, sub_question): sub_question
+                for sub_question in sub_questions
             }
-            
-            for future in concurrent.futures.as_completed(future_to_target):
-                try:
-                    target, answer_dict = future.result()
-                    individual_answers[target] = answer_dict
-                    
-                    company_references = answer_dict.get("references", [])
-                    aggregated_references.extend(company_references)
-                except Exception as e:
-                    company = future_to_target[future]
-                    print(f"Error processing company {company}: {str(e)}")
-                    raise
-        
-        # Remove duplicate references
+
+            for future in concurrent.futures.as_completed(future_to_sub_question):
+                sub_question = future_to_sub_question[future]
+                sub_question_answer = future.result()
+                _, answer_dict = sub_question_answer
+                individual_answers[sub_question] = answer_dict
+                aggregated_references.extend(answer_dict.get("references", []))
+
         unique_refs = {}
         for ref in aggregated_references:
             key = (ref.get("document_id"), ref.get("page_index"))
             unique_refs[key] = ref
         aggregated_references = list(unique_refs.values())
-        
-        # Step 3: Get the comparative answer using all individual answers
+
         comparative_answer = self.openai_processor.get_answer_from_rag_context(
             question=question,
             rag_context=individual_answers,
-            schema="comparative",
-            model=self.answering_model
+            model=self.answering_model,
+            is_comparative=True
         )
         self.response_data = self.openai_processor.response_data
-        
         comparative_answer["references"] = aggregated_references
         return comparative_answer
-    
